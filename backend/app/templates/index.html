@@ -10,7 +10,7 @@
     body{font-family:Inter,Arial,sans-serif;background:#07111f;color:#e5edf7;margin:0;padding:32px}
     .wrap{max-width:1180px;margin:auto}
     .top{display:flex;justify-content:space-between;gap:20px;align-items:flex-start;flex-wrap:wrap}
-    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;margin-top:22px}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-top:22px}
     .card{background:#0d1b2a;padding:20px;border-radius:16px;border:1px solid #20354b;box-shadow:0 12px 30px rgba(0,0,0,.18)}
     .num{font-size:32px;font-weight:800;margin-bottom:5px}.muted{color:#9fb0c3}
     h1,h2{margin-top:0}h1{margin-bottom:8px}.version{font-size:12px;padding:5px 9px;border:1px solid #2d4964;border-radius:999px;color:#a9c7e6}
@@ -18,30 +18,45 @@
     .stage{padding:14px;border-radius:12px;background:#0a1624;border:1px solid #1b3248}.stage strong{display:block;font-size:23px;margin-bottom:5px}
     .actions{display:flex;gap:10px;flex-wrap:wrap}.btn{display:inline-block;text-decoration:none;color:#eaf4ff;background:#12365a;border:1px solid #24598b;padding:10px 14px;border-radius:10px;font-weight:700}
     code{background:#07111f;border:1px solid #20354b;border-radius:7px;padding:3px 6px}.warning{border-color:#6b5420;background:#1e190b}
+    .flow{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px}.flow div{padding:14px;border-radius:12px;background:#0a1624;border:1px solid #1b3248}
   </style>
 </head>
 <body>
 <div class="wrap">
   <div class="top">
     <div>
-      <div><span class="version">V0.2</span></div>
+      <div><span class="version">V0.3</span></div>
       <h1>🚀 Norte MT Marketing Hub</h1>
-      <p class="muted">CRM + segmentação + campanhas personalizadas + follow-up.</p>
+      <p class="muted">CRM + campanhas + caixa de entrada inteligente + resposta comercial assistida.</p>
     </div>
     <div class="actions">
       <a class="btn" href="/docs">Abrir Swagger</a>
-      <a class="btn" href="/contacts">Ver contatos</a>
-      <a class="btn" href="/followups/due">Follow-ups vencidos</a>
+      <a class="btn" href="/contacts">Contatos</a>
+      <a class="btn" href="/inbox?status=new">Caixa de entrada</a>
+      <a class="btn" href="/followups/due">Follow-ups</a>
     </div>
   </div>
 
   <div class="grid">
     <div class="card"><div class="num">{{ contacts }}</div><div class="muted">Contatos</div></div>
+    <div class="card"><div class="num">{{ inbox_new }}</div><div class="muted">Respostas novas</div></div>
     <div class="card"><div class="num">{{ interested }}</div><div class="muted">Interessados</div></div>
     <div class="card"><div class="num">{{ clients }}</div><div class="muted">Clientes</div></div>
     <div class="card"><div class="num">{{ campaigns }}</div><div class="muted">Campanhas</div></div>
-    <div class="card"><div class="num">{{ sends }}</div><div class="muted">Envios registrados</div></div>
+    <div class="card"><div class="num">{{ sends }}</div><div class="muted">Envios</div></div>
     <div class="card"><div class="num">{{ followups_due }}</div><div class="muted">Follow-ups vencidos</div></div>
+  </div>
+
+  <div class="card" style="margin-top:16px">
+    <h2>Como a V0.3 trata uma resposta</h2>
+    <div class="flow">
+      <div>📥 Lê o e-mail via IMAP</div>
+      <div>🔎 Localiza o lead pelo e-mail</div>
+      <div>🧠 Classifica a intenção</div>
+      <div>📊 Atualiza o funil</div>
+      <div>✍️ Sugere uma resposta</div>
+      <div>✅ Você aprova o envio</div>
+    </div>
   </div>
 
   <div class="card" style="margin-top:16px">
@@ -57,14 +72,13 @@
   </div>
 
   <div class="card" style="margin-top:16px">
-    <h2>Personalização de campanhas</h2>
-    <p class="muted">Nos assuntos e mensagens você pode usar:</p>
-    <p><code>{{ '{{empresa}}' }}</code> <code>{{ '{{nome}}' }}</code> <code>{{ '{{cidade}}' }}</code> <code>{{ '{{segmento}}' }}</code></p>
+    <h2>Intenções reconhecidas</h2>
+    <p class="muted">O classificador reconhece interesse, pedido de preço, reunião, dúvida, ausência de interesse e descadastro. Descadastro e rejeição bloqueiam a resposta sugerida.</p>
   </div>
 
   <div class="card warning" style="margin-top:16px">
     <strong>Modo seguro</strong>
-    <p class="muted">Sem <code>SMTP_HOST</code>, nenhum e-mail real é enviado. O sistema trabalha em dry-run para testes.</p>
+    <p class="muted">A V0.3 não envia respostas recebidas automaticamente. O endpoint de aprovação só envia após ação explícita. Sem <code>SMTP_HOST</code>, até essa aprovação permanece em dry-run.</p>
   </div>
 </div>
 </body>
