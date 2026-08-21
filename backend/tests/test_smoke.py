@@ -64,8 +64,10 @@ def test_incoming_reply_updates_lead_pipeline():
     )
     assert reply.status_code == 200, reply.text
     payload = reply.json()
-    assert payload["intent"] == "preco"
-    assert payload["suggested_reply"]
+    assert payload["created"] is True
+    message = payload["message"]
+    assert message["intent"] == "preco"
+    assert message["suggested_reply"]
 
     contacts = client.get("/contacts", params={"q": email})
     assert contacts.status_code == 200
