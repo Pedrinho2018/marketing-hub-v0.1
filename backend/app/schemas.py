@@ -4,6 +4,7 @@ from typing import Literal
 from pydantic import BaseModel, EmailStr
 
 LeadStatus = Literal["novo", "contatado", "interessado", "proposta", "cliente", "perdido"]
+InboxStatus = Literal["new", "reviewed", "replied", "ignored"]
 
 
 class ContactCreate(BaseModel):
@@ -46,3 +47,12 @@ class FollowUpCreate(BaseModel):
     due_at: datetime
     channel: Literal["email", "whatsapp", "telefone"] = "email"
     note: str | None = None
+
+
+class IncomingReplyCreate(BaseModel):
+    sender_email: EmailStr
+    sender_name: str | None = None
+    subject: str = ""
+    body: str
+    message_id: str | None = None
+    received_at: datetime | None = None
