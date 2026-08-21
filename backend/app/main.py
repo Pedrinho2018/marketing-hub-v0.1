@@ -1,4 +1,5 @@
 import csv
+import hashlib
 import io
 from datetime import datetime
 
@@ -9,20 +10,22 @@ from sqlalchemy import func, inspect, or_, select, text
 from sqlalchemy.orm import Session
 
 from .database import Base, engine, get_db
-from .models import Campaign, Contact, FollowUp, SendLog
-from .schemas import CampaignCreate, ContactCreate, ContactUpdate, FollowUpCreate
+from .models import Campaign, Contact, FollowUp, IncomingMessage, SendLog
+from .schemas import CampaignCreate, ContactCreate, ContactUpdate, FollowUpCreate, IncomingReplyCreate
 from .services.compliance import can_receive_email
 from .services.email_sender import EmailSender
+from .services.inbox_reader import InboxReader
+from .services.reply_classifier import classify_reply, suggested_reply
 
-app = FastAPI(title="Norte MT Marketing Hub", version="0.2.0")
+app = FastAPI(title="Norte MT Marketing Hub", version="0.3.0")
 templates = Jinja2Templates(directory="app/templates")
 Base.metadata.create_all(bind=engine)
 
 
 def ensure_legacy_columns() -> None:
-    """Mantem bancos criados pela V0.1 compativeis com a V0.2.
+    """Mantém bancos criados pela V0.1/V0.2 compatíveis com a V0.3.
 
-    Para producao, o proximo passo e substituir isto por Alembic.
+    Para produção, o próximo passo é substituir isto por Alembic.
     """
     inspector = inspect(engine)
     tables = set(inspector.get_table_names())
@@ -77,6 +80,94 @@ def pipeline_stats(db: Session) -> dict[str, int]:
     }
 
 
+def normalize_received_at(value: datetime | None) -> datetime:
+    if value is None:
+        return datetime.utcnow()
+    if value.tzinfo is not None:
+        return value.astimezone().replace(tzinfo=None)
+    return value
+
+
+def generated_message_id(sender_email: str, subject: str, body: str, received_at: datetime) -> str:
+    digest = hashlib.sha256(
+        f"{sender_email}|{subject}|{received_at.isoformat()}|{body}".encode("utf-8", errors="ignore")
+    ).hexdigest()
+    return f"generated:{digest}"
+
+
+def find_contact_by_email(db: Session, sender_email: str) -> Contact | None:
+    return db.scalar(
+        select(Contact).where(func.lower(Contact.email) == sender_email.lower().strip())
+    )
+
+
+def apply_intent_to_contact(contact: Contact | None, intent: str) -> None:
+    if contact is None:
+        return
+
+    if intent == "descadastro":
+        contact.unsubscribed = True
+        if contact.status != "cliente":
+            contact.status = "perdido"
+    elif intent == "nao_interessado":
+        if contact.status != "cliente":
+            contact.status = "perdido"
+    elif intent in {"reuniao", "preco", "interessado", "duvida"}:
+        if contact.status in {"novo", "contatado"}:
+            contact.status = "interessado"
+
+    contact.updated_at = datetime.utcnow()
+
+
+def ingest_incoming_message(
+    db: Session,
+    *,
+    sender_email: str,
+    sender_name: str | None,
+    subject: str,
+    body: str,
+    message_id: str | None,
+    received_at: datetime | None,
+) -> tuple[IncomingMessage, bool]:
+    sender_email = sender_email.lower().strip()
+    if not sender_email:
+        raise ValueError("Mensagem sem remetente")
+
+    received_at = normalize_received_at(received_at)
+    message_id = (message_id or "").strip()[:255]
+    if not message_id:
+        message_id = generated_message_id(sender_email, subject, body, received_at)
+
+    existing = db.scalar(
+        select(IncomingMessage).where(IncomingMessage.message_id == message_id)
+    )
+    if existing:
+        return existing, False
+
+    contact = find_contact_by_email(db, sender_email)
+    intent, action = classify_reply(subject, body)
+    suggestion = suggested_reply(contact, intent)
+
+    item = IncomingMessage(
+        contact_id=contact.id if contact else None,
+        message_id=message_id,
+        sender_email=sender_email,
+        sender_name=(sender_name or "").strip() or None,
+        subject=(subject or "")[:500],
+        body=(body or "")[:50000],
+        intent=intent,
+        recommended_action=action,
+        suggested_reply=suggestion,
+        status="new",
+        received_at=received_at,
+    )
+    db.add(item)
+    apply_intent_to_contact(contact, intent)
+    db.commit()
+    db.refresh(item)
+    return item, True
+
+
 @app.get("/", response_class=HTMLResponse)
 def dashboard(request: Request, db: Session = Depends(get_db)):
     contacts = db.scalar(select(func.count()).select_from(Contact)) or 0
@@ -93,6 +184,11 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
         .select_from(FollowUp)
         .where(FollowUp.status == "pending", FollowUp.due_at <= datetime.utcnow())
     ) or 0
+    inbox_new = db.scalar(
+        select(func.count())
+        .select_from(IncomingMessage)
+        .where(IncomingMessage.status == "new")
+    ) or 0
 
     return templates.TemplateResponse(
         "index.html",
@@ -104,6 +200,7 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
             "interested": interested,
             "clients": clients,
             "followups_due": followups_due,
+            "inbox_new": inbox_new,
             "pipeline": pipeline_stats(db),
         },
     )
@@ -111,7 +208,7 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": "0.2.0"}
+    return {"status": "ok", "version": "0.3.0"}
 
 
 @app.get("/stats")
@@ -120,6 +217,10 @@ def stats(db: Session = Depends(get_db)):
         "contacts": db.scalar(select(func.count()).select_from(Contact)) or 0,
         "campaigns": db.scalar(select(func.count()).select_from(Campaign)) or 0,
         "sends": db.scalar(select(func.count()).select_from(SendLog)) or 0,
+        "inbox_new": db.scalar(
+            select(func.count()).select_from(IncomingMessage).where(IncomingMessage.status == "new")
+        )
+        or 0,
         "pipeline": pipeline_stats(db),
     }
 
@@ -154,7 +255,7 @@ def list_contacts(
 @app.post("/contacts")
 def create_contact(payload: ContactCreate, db: Session = Depends(get_db)):
     if db.scalar(select(Contact).where(Contact.email == payload.email)):
-        raise HTTPException(409, "E-mail ja cadastrado")
+        raise HTTPException(409, "E-mail já cadastrado")
     item = Contact(**payload.model_dump())
     db.add(item)
     db.commit()
@@ -166,7 +267,7 @@ def create_contact(payload: ContactCreate, db: Session = Depends(get_db)):
 def update_contact(contact_id: int, payload: ContactUpdate, db: Session = Depends(get_db)):
     contact = db.get(Contact, contact_id)
     if not contact:
-        raise HTTPException(404, "Contato nao encontrado")
+        raise HTTPException(404, "Contato não encontrado")
 
     changes = payload.model_dump(exclude_unset=True)
     new_email = changes.get("email")
@@ -175,7 +276,7 @@ def update_contact(contact_id: int, payload: ContactUpdate, db: Session = Depend
             select(Contact).where(Contact.email == new_email, Contact.id != contact_id)
         )
         if duplicate:
-            raise HTTPException(409, "E-mail ja cadastrado em outro contato")
+            raise HTTPException(409, "E-mail já cadastrado em outro contato")
 
     for field, value in changes.items():
         setattr(contact, field, value)
@@ -267,7 +368,7 @@ def create_campaign(payload: CampaignCreate, db: Session = Depends(get_db)):
 def send_campaign(campaign_id: int, db: Session = Depends(get_db)):
     campaign = db.get(Campaign, campaign_id)
     if not campaign:
-        raise HTTPException(404, "Campanha nao encontrada")
+        raise HTTPException(404, "Campanha não encontrada")
 
     sender = EmailSender()
     stmt = select(Contact)
@@ -296,7 +397,7 @@ def send_campaign(campaign_id: int, db: Session = Depends(get_db)):
         )
         if already_sent:
             skipped += 1
-            skip_reasons["Campanha ja enviada"] = skip_reasons.get("Campanha ja enviada", 0) + 1
+            skip_reasons["Campanha já enviada"] = skip_reasons.get("Campanha já enviada", 0) + 1
             continue
 
         log = SendLog(campaign_id=campaign.id, contact_id=contact.id, status="processing")
@@ -354,7 +455,7 @@ def due_followups(db: Session = Depends(get_db)):
 @app.post("/followups")
 def create_followup(payload: FollowUpCreate, db: Session = Depends(get_db)):
     if not db.get(Contact, payload.contact_id):
-        raise HTTPException(404, "Contato nao encontrado")
+        raise HTTPException(404, "Contato não encontrado")
     item = FollowUp(**payload.model_dump())
     db.add(item)
     db.commit()
@@ -366,9 +467,156 @@ def create_followup(payload: FollowUpCreate, db: Session = Depends(get_db)):
 def complete_followup(followup_id: int, db: Session = Depends(get_db)):
     item = db.get(FollowUp, followup_id)
     if not item:
-        raise HTTPException(404, "Follow-up nao encontrado")
+        raise HTTPException(404, "Follow-up não encontrado")
     item.status = "done"
     item.completed_at = datetime.utcnow()
     db.commit()
     db.refresh(item)
     return item
+
+
+@app.get("/inbox")
+def list_inbox(
+    status: str | None = Query(default=None),
+    intent: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    stmt = select(IncomingMessage)
+    if status:
+        stmt = stmt.where(IncomingMessage.status == status)
+    if intent:
+        stmt = stmt.where(IncomingMessage.intent == intent)
+    return db.scalars(stmt.order_by(IncomingMessage.received_at.desc()).limit(500)).all()
+
+
+@app.post("/inbox/replies")
+def ingest_reply(payload: IncomingReplyCreate, db: Session = Depends(get_db)):
+    try:
+        item, created = ingest_incoming_message(
+            db,
+            sender_email=str(payload.sender_email),
+            sender_name=payload.sender_name,
+            subject=payload.subject,
+            body=payload.body,
+            message_id=payload.message_id,
+            received_at=payload.received_at,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"created": created, "message": item}
+
+
+@app.post("/inbox/sync")
+def sync_inbox(limit: int = Query(default=50, ge=1, le=200), db: Session = Depends(get_db)):
+    reader = InboxReader()
+    if not reader.configured:
+        return {
+            "configured": False,
+            "fetched": 0,
+            "created": 0,
+            "duplicates": 0,
+            "invalid": 0,
+            "message": "Configure IMAP_HOST, IMAP_USER e IMAP_PASSWORD para ler a caixa real.",
+        }
+
+    fetched = created = duplicates = invalid = 0
+
+    try:
+        with reader:
+            messages = reader.fetch_unseen(limit=limit)
+            fetched = len(messages)
+            for message in messages:
+                if not message["sender_email"]:
+                    invalid += 1
+                    reader.mark_seen(message["imap_id"])
+                    continue
+                try:
+                    _, was_created = ingest_incoming_message(
+                        db,
+                        sender_email=message["sender_email"],
+                        sender_name=message["sender_name"],
+                        subject=message["subject"],
+                        body=message["body"],
+                        message_id=message["message_id"],
+                        received_at=message["received_at"],
+                    )
+                    if was_created:
+                        created += 1
+                    else:
+                        duplicates += 1
+                    reader.mark_seen(message["imap_id"])
+                except Exception:
+                    db.rollback()
+                    invalid += 1
+    except Exception as exc:
+        raise HTTPException(502, f"Falha ao sincronizar IMAP: {exc}") from exc
+
+    return {
+        "configured": True,
+        "fetched": fetched,
+        "created": created,
+        "duplicates": duplicates,
+        "invalid": invalid,
+    }
+
+
+@app.patch("/inbox/{message_id}/reviewed")
+def mark_inbox_reviewed(message_id: int, db: Session = Depends(get_db)):
+    item = db.get(IncomingMessage, message_id)
+    if not item:
+        raise HTTPException(404, "Mensagem não encontrada")
+    if item.status == "new":
+        item.status = "reviewed"
+        db.commit()
+        db.refresh(item)
+    return item
+
+
+@app.patch("/inbox/{message_id}/ignore")
+def ignore_inbox_message(message_id: int, db: Session = Depends(get_db)):
+    item = db.get(IncomingMessage, message_id)
+    if not item:
+        raise HTTPException(404, "Mensagem não encontrada")
+    item.status = "ignored"
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+@app.post("/inbox/{message_id}/approve-send")
+def approve_and_send_reply(message_id: int, db: Session = Depends(get_db)):
+    item = db.get(IncomingMessage, message_id)
+    if not item:
+        raise HTTPException(404, "Mensagem não encontrada")
+    if item.status == "replied":
+        raise HTTPException(409, "Esta mensagem já foi respondida")
+    if item.intent in {"descadastro", "nao_interessado"}:
+        raise HTTPException(409, "Resposta automática bloqueada para este tipo de retorno")
+    if not item.suggested_reply:
+        raise HTTPException(409, "Não existe resposta sugerida para esta mensagem")
+
+    contact = db.get(Contact, item.contact_id) if item.contact_id else None
+    if contact and contact.unsubscribed:
+        raise HTTPException(409, "Contato está descadastrado")
+
+    subject = item.subject.strip()
+    if not subject.lower().startswith("re:"):
+        subject = f"Re: {subject}" if subject else "Re: Contato Norte MT Sistemas"
+
+    sender = EmailSender()
+    provider_id = sender.send(item.sender_email, subject, item.suggested_reply)
+    item.reply_provider_message_id = provider_id
+
+    if sender.dry_run:
+        item.status = "reviewed"
+    else:
+        item.status = "replied"
+        item.replied_at = datetime.utcnow()
+
+    db.commit()
+    db.refresh(item)
+    return {
+        "message": item,
+        "dry_run": sender.dry_run,
+        "provider_message_id": provider_id,
+    }
