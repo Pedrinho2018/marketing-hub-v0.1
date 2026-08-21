@@ -63,3 +63,23 @@ class FollowUp(Base):
     status: Mapped[str] = mapped_column(String(30), default="pending", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class IncomingMessage(Base):
+    __tablename__ = "incoming_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    contact_id: Mapped[int | None] = mapped_column(ForeignKey("contacts.id"), nullable=True, index=True)
+    message_id: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    sender_email: Mapped[str] = mapped_column(String(255), index=True)
+    sender_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    subject: Mapped[str] = mapped_column(String(500), default="")
+    body: Mapped[str] = mapped_column(Text)
+    intent: Mapped[str] = mapped_column(String(40), default="outro", index=True)
+    recommended_action: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    suggested_reply: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(30), default="new", index=True)
+    received_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    replied_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    reply_provider_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
