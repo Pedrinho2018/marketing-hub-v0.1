@@ -1,0 +1,36 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: norte_marketing
+      POSTGRES_USER: norte
+      POSTGRES_PASSWORD: norte_dev
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  api:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+psycopg://norte:norte_dev@db:5432/norte_marketing
+      REDIS_URL: redis://redis:6379/0
+      APP_ENV: dev
+      SMTP_HOST: ""
+      SMTP_PORT: "587"
+      SMTP_USER: ""
+      SMTP_PASSWORD: ""
+      SMTP_FROM: "contato@nortemtsistemas.com.br"
+    depends_on:
+      - db
+      - redis
+    ports:
+      - "8000:8000"
+
+volumes:
+  pgdata:
