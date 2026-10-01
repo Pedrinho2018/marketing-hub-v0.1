@@ -14,7 +14,7 @@ jobs:
     timeout-minutes: 10
 
     env:
-      PYTHONPATH: backend
+      PYTHONPATH: ${{ github.workspace }}/backend
       DATABASE_URL: sqlite:///./ci_test.db
       SMTP_HOST: ""
       SMTP_PORT: "587"
