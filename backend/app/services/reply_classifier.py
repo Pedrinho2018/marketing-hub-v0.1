@@ -1,3 +1,4 @@
+import re
 import unicodedata
 
 
@@ -6,8 +7,21 @@ def normalize_text(value: str) -> str:
     return "".join(ch for ch in normalized if not unicodedata.combining(ch)).lower()
 
 
+# Palavras curtas de descadastro: exigem limite de palavra para nao casar
+# dentro de outras palavras ("sair" em "sairemos", "sai" em "assinar").
+STANDALONE_OPTOUT = ("sair", "remover", "descadastrar", "stop", "cancelar")
+
+
+def _has_standalone_optout(text: str) -> bool:
+    return any(re.search(rf"\b{re.escape(w)}\b", text) for w in STANDALONE_OPTOUT)
+
+
 def classify_reply(subject: str, body: str) -> tuple[str, str]:
     text = normalize_text(f"{subject}\n{body}")
+
+    # Opt-out tem precedencia absoluta sobre qualquer outra intencao.
+    if _has_standalone_optout(text):
+        return "descadastro", "Descadastrar contato e não enviar novas campanhas."
 
     rules = [
         (
@@ -17,9 +31,23 @@ def classify_reply(subject: str, body: str) -> tuple[str, str]:
                 "descadastro",
                 "remova meu email",
                 "remover meu email",
+                "remova meu e-mail",
+                "remover meu e-mail",
+                "remova-me",
+                "me remova",
                 "pare de enviar",
+                "parem de enviar",
+                "nao envie mais",
+                "não envie mais",
+                "nao enviem mais",
+                "não enviem mais",
                 "nao quero receber",
                 "não quero receber",
+                "cancelar inscricao",
+                "cancelar inscrição",
+                "unsubscribe",
+                "opt-out",
+                "opt out",
             ),
             "Descadastrar contato e não enviar novas campanhas.",
         ),
@@ -28,9 +56,19 @@ def classify_reply(subject: str, body: str) -> tuple[str, str]:
             (
                 "nao tenho interesse",
                 "não tenho interesse",
+                "nao temos interesse",
+                "não temos interesse",
                 "sem interesse",
+                "nao ha interesse",
+                "não há interesse",
                 "nao precisamos",
                 "não precisamos",
+                "nao preciso",
+                "não preciso",
+                "ja temos fornecedor",
+                "já temos fornecedor",
+                "ja possuimos",
+                "já possuímos",
                 "nao quero",
                 "não quero",
             ),

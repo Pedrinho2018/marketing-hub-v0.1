@@ -64,11 +64,11 @@ jobs:
           set -euxo pipefail
           python -c "from app.main import app; print('FastAPI:', app.title, app.version)"
 
-      - name: 7 - Rodar smoke tests
+      - name: 7 - Rodar testes
         working-directory: backend
         run: |
           set -euxo pipefail
-          pytest tests/test_smoke.py -vv --maxfail=1 --tb=short
+          pytest tests/ -vv --maxfail=1 --tb=short
 
       - name: 8 - Resultado final
         if: success()
